@@ -26,14 +26,15 @@ static inline bool isSymbol(char const c) {
 	}
 }
 
-static bool lexer_matches(char const * text, size_t const textRange, char const * zstring) {
+static bool lexeme_matches(Lexeme const * lexeme, char const * zstring) {
 	size_t identifierRange;
+	size_t lexemeLength = lexeme->end;
 
 	while (*(zstring + identifierRange)) identifierRange += 1;
 
-	if (textRange != identifierRange) return false;
+	if (lexemeLength != identifierRange) return false;
 
-	for (size_t i = 0; i < textRange; i += 1) if (text[i] != zstring[i]) return false;
+	for (size_t i = 0; i < lexemeLength; i += 1) if (lexeme->start[i] != zstring[i]) return false;
 
 	return true;
 }
@@ -42,27 +43,17 @@ static char const * keywords[] = {"var"};
 
 enum { KeywordCount = (sizeof(keywords) / sizeof(char const *))};
 
-static bool lexer_isKeyword(char const * text, size_t const textRange) {
+static bool lexeme_isKeyword(Lexeme const * lexeme, size_t const textRange) {
 	for (size_t i = 0; i < KeywordCount; i += 1) {
-		if (lexer_matches(text, textRange, keywords[i])) return true;
+		if (lexeme_matches(lexeme, keywords[i])) return true;
 	}
 
 	return false;
 }
 
-typedef enum {
-	Token_Symbol,
-	Token_Keyword,
-	Token_Identifier,
-} Token;
-
-typedef struct {
-	Token token;
-
-	size_t end;
-
-	char const * start;
-} Lexeme;
+static inline bool lexeme_isSymbol(Lexeme const * lexeme, char const symbolCharacter) {
+	return ((lexeme->token == Token_Symbol) && (lexeme->start[0] == symbolCharacter));
+}
 
 typedef struct {
 	size_t cursor;
@@ -106,14 +97,15 @@ static bool lexer_next(Lexer * lexer, Lexeme * lexeme) {
 			while ((!lexer_endOfFile(lexer)) && (!isWhitespace(c)) && (!isSymbol(c))) end += 1;
 
 			(*lexeme) = (Lexeme){
-				.token = (
-					lexer_isKeyword((source + lexer->cursor), end) ?
-					Token_Keyword :
-					Token_Identifier
-				),
 				.end = end,
 				.start = (source + lexer->cursor)
 			};
+
+			lexeme->token = (
+				lexeme_isKeyword(lexeme, end) ?
+				Token_Keyword :
+				Token_Identifier
+			);
 
 			lexer->cursor += end;
 
@@ -124,43 +116,78 @@ static bool lexer_next(Lexer * lexer, Lexeme * lexeme) {
 	return false;
 }
 
-typedef struct {} ASTNode;
+static inline ASTExpression astExpression_error(char const * message) {
+	return (ASTExpression){.as = {.error = message}, .type = ASTExpressionType_Error};
+}
 
-typedef struct {
-	size_t count;
+static inline ASTStatement astStatement_error(char const * message) {
+	return (ASTStatement){.as = {.error = message}, .type = ASTStatementType_Error};
+}
 
-	ASTNode * nodes;
-} AST;
+static inline ASTStatement astStatement_var(
+	Lexeme const * typenameLexeme,
+	Lexeme const * identifierLexeme,
+	ASTExpression expression
+) {
+	ASTStatementVar * var = make(ASTStatementVar);
+	var->typenameLexeme = (*typenameLexeme);
+	var->identifierLexeme = (*identifierLexeme);
+	var->expression = expression;
 
-static char const * parseKeyword(Lexer * const lexer, Lexeme * const keyword) {
-	if (keyword->token != Token_Keyword) return "Expected keyword";
+	return (ASTStatement){.as = {.var = var}, .type = ASTStatementType_Var,};
+}
 
-	if (lexeme_matches(keyword, "var")) {
-		Lexeme identifier;
+static ASTExpression parseExpression(Lexer * lexer, Lexeme * const symbol) {
+	return astExpression_error("Not implemented");
+}
 
-		if ((!lexer_next(&lexer, &identifier)) || (keyword->token != Token_Identifier)) {
-			return "Expected identifier after `local`";
-		}
+static ASTStatement parseDeclaration(Lexer * lexer, Lexeme * const keyword) {
+	if (keyword->token == Token_Keyword) {
+		if (lexeme_matches(keyword, "var")) {
+			Lexeme identifier;
 
-		Lexeme symbol;
+			if (lexer_next(lexer, &identifier) && (keyword->token == Token_Identifier)) {
+				Lexeme symbol;
 
-		if (lexer_next(&lexer, &identifier) && lexeme_isSymbol(&symbol, '=')) {
-			// TODO: Parse expression.
+				if (lexer_next(lexer, &symbol) && lexeme_isSymbol(&symbol, '=')) {
+					if (lexer_next(lexer, &symbol)) {
+						return astStatement_var(
+							keyword,
+							&identifier,
+							parseExpression(lexer, &symbol)
+						);
+					}
+
+					return astStatement_error("Unexpected end of line at `=`");
+				}
+
+				return astStatement_error("Unexpected variable declaration without expression");
+			}
+
+			return astStatement_error("Expected identifier after `var`");
+		} else {
+			// TODO: "while", "if", "func", "proc", etc...
 		}
 	}
 
+	return astStatement_error("Expected keyword at beginning of declaration");
+}
+
+static ASTStatement * astStatementList_append(ASTStatementList * list, ASTStatement statement) {
+	// TODO: Implement.
 	return NULL;
 }
 
-char const * parse(String const source) {
+ASTStatementList parse(String const source) {
 	Lexer lexer = {0, source};
+	ASTStatementList statements = {};
 	Lexeme declaration;
 
 	while (lexer_next(&lexer, &declaration)) {
-		char const * error = parseKeyword(&lexer, &declaration);
-
-		if (error) return error;
+		if (!astStatementList_append(&statements, parseDeclaration(&lexer, &declaration))) {
+			// Unrecoverable out of memory error.
+		}
 	}
 
-	return NULL;
+	return statements;
 }
